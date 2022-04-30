@@ -4,6 +4,8 @@
 #include "ixwebsocket/IXWebSocket.h"
 #include "ixwebsocket/IXUserAgent.h"
 
+#include <cstdint>
+#include <random>
 #include <fstream>
 #include <json/json.h>
 #include <json/reader.h>
@@ -12,7 +14,6 @@
 #include <deque>
 #include <string>
 #include <chrono>
-#include <cstdlib>
 #include <vector>
 
 #define ADD_TO_MSGQUEUE(x,y) messageQueue.push_back(std::pair<std::string,int>(x,y))
@@ -26,7 +27,9 @@ std::string ap_player_name;
 std::string ap_ip;
 std::string ap_game;
 std::string ap_passwd;
-int ap_uuid = 0;
+
+std::mt19937 rando;
+std::uint64_t ap_uuid = 0;
 
 //Deathlink Stuff
 bool deathlinkstat = false;
@@ -55,6 +58,10 @@ Json::Value sp_save_root;
 //Misc Data for Clients
 AP_RoomInfo lib_room_info;
 
+//Server Data Stuff
+std::map<std::string, AP_GetServerDataRequest*> map_server_data;
+std::chrono::steady_clock::time_point last_send_req = std::chrono::steady_clock::now();
+
 //Slot Data Stuff
 std::map<std::string, void (*)(int)> map_slotdata_callback_int;
 std::map<std::string, void (*)(std::map<int,int>)> map_slotdata_callback_mapintint;
@@ -72,7 +79,9 @@ void WriteSPSave();
 
 void AP_Init(const char* ip, const char* game, const char* player_name, const char* passwd) {
     multiworld = true;
-    std::srand(std::time(nullptr)); // use current time as seed for random generator
+    
+    auto milliseconds_since_epoch = std::chrono::duration_cast<std::chrono::milliseconds>(last_send_req.time_since_epoch()).count();
+    rando = std::mt19937(milliseconds_since_epoch);
 
     if (!strcmp(ip,"")) {
         ip = "archipelago.gg:38281";
@@ -303,7 +312,7 @@ bool parse_response(std::string msg, std::string &request) {
 
             if (!auth) {
                 Json::Value req_t;
-                ap_uuid = std::rand();
+                ap_uuid = rando();
                 req_t[0]["cmd"] = "Connect";
                 req_t[0]["game"] = ap_game;
                 req_t[0]["name"] = ap_player_name;
@@ -351,6 +360,13 @@ bool parse_response(std::string msg, std::string &request) {
                 }
                 
             }
+
+            AP_GetServerDataRequest serverdata_request;
+            serverdata_request.key = "APCppLastRecv" + ap_player_name + std::to_string(ap_player_id);
+            serverdata_request.data = &last_item_idx;
+            serverdata_request.type = AP_DataType::Int;
+            AP_GetServerData(&serverdata_request);
+
             Json::Value req_t;
             req_t[0]["cmd"] = "GetDataPackage";
             request = writer.write(req_t);
@@ -365,18 +381,25 @@ bool parse_response(std::string msg, std::string &request) {
                 }
             }
             Json::Value req_t;
-            req_t[0]["cmd"] = "Get";
-            req_t[0]["keys"][0] = "APCppLastRecv" + ap_player_name + std::to_string(ap_player_id);
-            request = writer.write(req_t);
-            return true;
-        } else if (!strcmp(cmd,"Retrieved")) {
-            last_item_idx = root[i]["keys"].get("APCppLastRecv" + ap_player_name + std::to_string(ap_player_id), last_item_idx).asInt();
-            Json::Value req_t;
             req_t[0]["cmd"] = "Sync";
             request = writer.write(req_t);
             auth = true;
             ADD_TO_MSGQUEUE("Connected to Archipelago", 0);
             return true;
+        } else if (!strcmp(cmd,"Retrieved")) {
+            for (auto itr : root[i]["keys"].getMemberNames()) {
+                AP_GetServerDataRequest* target = map_server_data[itr];
+                switch (target->type) {
+                    case AP_DataType::Int:
+                        *((int*)target->data) = root[i]["keys"][itr].asInt();
+                        break;
+                    case AP_DataType::Raw:
+                        *((std::string*)target->data) = writer.write(root[i]["keys"][itr]);
+                        break;
+                }
+                target->status = AP_RequestStatus::Done;
+                map_server_data.erase(itr);
+            }
         } else if (!strcmp(cmd,"Print")) {
             printf("AP: %s\n", root[i]["text"].asCString());
         } else if (!strcmp(cmd,"PrintJSON")) {
@@ -410,13 +433,7 @@ bool parse_response(std::string msg, std::string &request) {
                 }
             }
             last_item_idx = item_idx == 0 ? root[i]["items"].size() : last_item_idx + root[i]["items"].size();
-            Json::Value req_t;
-            req_t[0]["cmd"] = "Set";
-            req_t[0]["key"] = "APCppLastRecv" + ap_player_name + std::to_string(ap_player_id);
-            req_t[0]["operations"][0]["operation"] = "replace";
-            req_t[0]["operations"][0]["value"] = last_item_idx;
-            request = writer.write(req_t);
-            return true;
+            AP_SetServerDataRaw("APCppLastRecv" + ap_player_name + std::to_string(ap_player_id), "replace", std::to_string(last_item_idx), "");
         } else if (!strcmp(cmd, "RoomUpdate")) {
             for (unsigned int j = 0; j < root[i]["checked_locations"].size(); j++) {
                 //Sync checks with server
@@ -444,10 +461,6 @@ bool parse_response(std::string msg, std::string &request) {
                     break;
                 }
             }
-        }
-        
-        else {
-            printf("AP: Unhandled Packet. Command: %s\n", cmd);
         }
     }
     return false;
@@ -489,6 +502,45 @@ AP_ConnectionStatus AP_GetConnectionStatus() {
         }
     }
     return AP_ConnectionStatus::Disconnected;
+}
+
+int AP_GetUUID() {
+    return ap_uuid;
+}
+
+void AP_SetServerDataRaw(std::string key, std::string operation, std::string value, std::string default_val) {
+    // Rate Limiting
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - last_send_req).count() < 20) {
+        return;
+    }
+    last_send_req = std::chrono::steady_clock::now();
+
+    Json::Value data;
+    reader.parse(value, data);
+
+    Json::Value req_t;
+    req_t[0]["cmd"] = "Set";
+    req_t[0]["key"] = key;
+    if (!default_val.empty()) {
+        Json::Value default_val_json;
+        reader.parse(default_val, default_val_json);
+        req_t[0]["default"] = default_val_json;
+    }
+    req_t[0]["operations"][0]["operation"] = operation;
+    req_t[0]["operations"][0]["value"] = data;
+    APSend(writer.write(req_t));
+}
+
+void AP_GetServerData(AP_GetServerDataRequest* request) {
+    if (map_server_data.find(request->key) != map_server_data.end()) return;
+
+    map_server_data[request->key] = request;
+    request->status = Pending;
+
+    Json::Value req_t;
+    req_t[0]["cmd"] = "Get";
+    req_t[0]["keys"][0] = request->key;
+    APSend(writer.write(req_t));
 }
 
 // PRIV
