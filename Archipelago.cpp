@@ -14,6 +14,7 @@
 #include <deque>
 #include <string>
 #include <chrono>
+#include <utility>
 #include <vector>
 
 #define ADD_TO_MSGQUEUE(x,y) messageQueue.push_back(std::pair<std::string,int>(x,y))
@@ -116,6 +117,10 @@ void AP_Init(const char* ip, const char* game, const char* player_name, const ch
             else if (msg->type == ix::WebSocketMessageType::Error)
             {
                 auth = false;
+                for (std::pair<std::string,AP_GetServerDataRequest*> itr : map_server_data) {
+                    itr.second->status = AP_RequestStatus::Error;
+                    map_server_data.erase(itr.first);
+                }
                 printf("AP: Error connecting to Archipelago. Retries: %d\n", msg->errorInfo.retries-1);
             }
         }
@@ -491,17 +496,6 @@ void AP_ClearLatestMessage() {
         messageQueue.pop_front();
     }
     messageQueue.shrink_to_fit();
-}
-
-AP_ConnectionStatus AP_GetConnectionStatus() {
-    if (webSocket.getReadyState() == ix::ReadyState::Open) {
-        if (auth) {
-            return AP_ConnectionStatus::Authenticated;
-        } else {
-            return AP_ConnectionStatus::Connected;
-        }
-    }
-    return AP_ConnectionStatus::Disconnected;
 }
 
 int AP_GetUUID() {
