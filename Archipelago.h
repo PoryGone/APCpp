@@ -42,6 +42,8 @@ struct AP_RoomInfo {
 
 int AP_GetRoomInfo(AP_RoomInfo*);
 
+void AP_KeepAlive();
+
 void AP_EnableQueueItemRecvMsgs(bool);
 
 void AP_SetDeathLinkSupported(bool);

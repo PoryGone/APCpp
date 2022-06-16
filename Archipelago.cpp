@@ -228,6 +228,12 @@ void AP_DeathLinkSend() {
     APSend(writer.write(req_t));
 }
 
+void AP_KeepAlive() {
+    Json::Value req_t;
+    req_t[0]["cmd"] = "Bounce";
+    APSend(writer.write(req_t));
+}
+
 void AP_EnableQueueItemRecvMsgs(bool b) {
     queueitemrecvmsg = b;
 }
