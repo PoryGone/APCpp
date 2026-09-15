@@ -7,12 +7,16 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-add_library(APCpp SHARED Archipelago.cpp Archipelago_DataStorageSim.cpp Archipelago_Gifting.cpp)
+add_library(APCpp STATIC Archipelago.cpp Archipelago_DataStorageSim.cpp Archipelago_Gifting.cpp)
 
 # Allows users to use APCpp as a dependency
 target_include_directories(APCpp PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 set_target_properties(APCpp PROPERTIES PUBLIC_HEADER Archipelago.h)
+
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(ENABLE_TESTING OFF CACHE BOOL "" FORCE)
